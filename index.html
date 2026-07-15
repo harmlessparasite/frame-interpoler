@@ -1,0 +1,329 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Frame Interpoler</title>
+  <style>
+    :root {
+      --bg: transparent;
+      --panel: rgba(30, 33, 42, 0.55);
+      --panel-solid: rgba(30, 33, 42, 0.92);
+      --panel2: rgba(45, 49, 61, 0.6);
+      --accent: #0a84ff;
+      --accent2: #30d158;
+      --text: #f2f4f7;
+      --muted: #9aa0aa;
+      --border: rgba(255, 255, 255, 0.10);
+      --danger: #ff453a;
+      --warn: #ffd60a;
+    }
+    * { box-sizing: border-box; }
+    html, body { height: 100%; }
+    /* Electron frameless drag region: the window can be dragged from the top
+       header and any non-interactive area. Interactive controls opt out. */
+    body { -webkit-app-region: drag; }
+    button, select, input, .panel, #log, #player { -webkit-app-region: no-drag; }
+    body {
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      background: transparent;
+      color: var(--text);
+      padding: 38px 22px 22px;
+      font-size: 13px;
+      -webkit-font-smoothing: antialiased;
+    }
+    h1 { font-size: 19px; font-weight: 600; margin: 0 0 2px; letter-spacing: -0.2px; }
+    .sub { color: var(--muted); font-size: 12.5px; margin-bottom: 16px; }
+    .panel {
+      background: var(--panel);
+      -webkit-backdrop-filter: blur(30px) saturate(180%);
+      backdrop-filter: blur(30px) saturate(180%);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 14px 16px;
+      margin-bottom: 12px;
+    }
+    /* Drop zone — the whole marked area accepts drops (children ignore pointer) */
+    #drop {
+      border: 2px dashed rgba(255,255,255,0.22);
+      border-radius: 14px;
+      padding: 30px 16px;
+      text-align: center;
+      color: var(--muted);
+      cursor: pointer;
+      transition: border-color .15s, background .15s, color .15s;
+      min-height: 120px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 4px;
+    }
+    #drop * { pointer-events: none; }
+    #drop:hover, #drop.over { border-color: var(--accent); color: var(--text); background: rgba(10,132,255,0.08); }
+    #drop .big { font-size: 15px; font-weight: 600; color: var(--text); }
+    .file { font-size: 12px; color: var(--muted); margin-top: 6px; word-break: break-all; max-width: 100%; }
+
+    label { display: block; font-size: 11.5px; color: var(--muted); margin: 0 0 5px; font-weight: 500; }
+    .row { display: flex; gap: 12px; flex-wrap: wrap; }
+    .row > div { flex: 1; min-width: 150px; }
+    select, input[type=text] {
+      width: 100%;
+      background: var(--panel2);
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 7px;
+      padding: 7px 9px;
+      font-size: 13px;
+      appearance: none;
+      -webkit-appearance: none;
+    }
+    select { background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='6'><path d='M0 0l5 6 5-6z' fill='%239aa0aa'/></svg>"); background-repeat: no-repeat; background-position: right 10px center; padding-right: 26px; }
+    .checks { display: flex; gap: 18px; flex-wrap: wrap; margin-top: 10px; }
+    .checks label { display: flex; align-items: center; gap: 7px; color: var(--text); font-size: 13px; margin: 0; font-weight: 400; }
+    input[type=checkbox] { width: 16px; height: 16px; accent-color: var(--accent); }
+
+    .queue { list-style: none; margin: 0; padding: 0; max-height: 150px; overflow: auto; }
+    .queue li {
+      display: flex; align-items: center; gap: 10px;
+      padding: 7px 9px; border-radius: 8px; margin-bottom: 5px;
+      background: var(--panel2); font-size: 12.5px;
+    }
+    .queue li .name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .badge { font-size: 10.5px; font-weight: 600; padding: 2px 8px; border-radius: 20px; text-transform: uppercase; letter-spacing: .3px; }
+    .badge.queued { background: rgba(255,255,255,0.12); color: var(--muted); }
+    .badge.processing { background: rgba(10,132,255,0.22); color: #6cb6ff; }
+    .badge.done { background: rgba(48,209,88,0.20); color: #5be584; }
+    .badge.error { background: rgba(255,69,58,0.20); color: #ff7b72; }
+    .badge.canceled { background: rgba(255,214,10,0.18); color: #ffd60a; }
+    .queue .pmini { width: 70px; height: 5px; background: rgba(255,255,255,0.12); border-radius: 4px; overflow: hidden; }
+    .queue .pmini > i { display: block; height: 100%; width: 0%; background: var(--accent); }
+
+    .metrics { display: flex; gap: 12px; }
+    .metric { flex: 1; background: var(--panel2); border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px 8px; }
+    .metric .mtop { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 6px; }
+    .metric .mlabel { font-size: 11.5px; color: var(--muted); font-weight: 600; }
+    .metric .mval { font-size: 15px; font-weight: 700; font-variant-numeric: tabular-nums; }
+    .metric .mval small { font-size: 10px; color: var(--muted); font-weight: 500; margin-left: 3px; }
+    .metric canvas { width: 100%; height: 56px; display: block; }
+
+    #progressWrap { margin-top: 4px; }
+    #bar { height: 12px; background: var(--panel2); border-radius: 8px; overflow: hidden; border: 1px solid var(--border); }
+    #fill { height: 100%; width: 0%; background: linear-gradient(90deg, var(--accent), #5ac8fa); transition: width .25s; }
+    .prow { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-top: 7px; }
+    #stage { font-size: 12px; color: var(--muted); flex: 1; }
+    #eta { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+
+    .actions { display: flex; gap: 10px; margin-top: 10px; }
+    button {
+      background: var(--accent); color: #fff; border: none; border-radius: 8px;
+      padding: 8px 16px; font-size: 13px; font-weight: 600; cursor: pointer;
+      font-family: inherit;
+    }
+    button:hover { filter: brightness(1.08); }
+    button:disabled { opacity: .4; cursor: not-allowed; filter: none; }
+    button.ghost { background: var(--panel2); border: 1px solid var(--border); color: var(--text); }
+    button.danger { background: var(--danger); }
+    button.secondary { background: transparent; border: 1px solid var(--border); color: var(--text); }
+
+    #log {
+      background: rgba(0,0,0,0.35);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 9px 10px;
+      height: 130px; overflow: auto;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: 11px; color: #b9c6d6; white-space: pre-wrap; margin-top: 10px;
+    }
+    .hint { font-size: 11px; color: var(--muted); margin-top: 8px; }
+    .hint code { background: rgba(255,255,255,0.08); padding: 1px 5px; border-radius: 4px; }
+
+    /* queue play button */
+    .queue .pbtn {
+      background: var(--panel-solid); border: 1px solid var(--border); color: var(--text);
+      width: 26px; height: 26px; border-radius: 7px; padding: 0; font-size: 12px; line-height: 1; flex: 0 0 auto;
+    }
+    .queue .pbtn:hover { background: rgba(10,132,255,0.25); }
+    .queue .rbtn {
+      background: var(--panel-solid); border: 1px solid var(--border); color: var(--muted);
+      width: 26px; height: 26px; border-radius: 7px; padding: 0; font-size: 12px; line-height: 1; flex: 0 0 auto;
+    }
+    .queue .rbtn:hover { background: rgba(255,69,58,0.22); color: #ff7b72; }
+
+    /* ---- in-app player overlay ---- */
+    #player {
+      position: fixed; inset: 0; z-index: 50;
+      display: flex; align-items: center; justify-content: center;
+      background: rgba(0,0,0,0.55);
+      -webkit-backdrop-filter: blur(20px) saturate(160%);
+      backdrop-filter: blur(20px) saturate(160%);
+    }
+    #player.hidden { display: none; }
+    .player-card {
+      width: min(760px, 92vw); max-height: 92vh; overflow: auto;
+      background: var(--panel-solid);
+      border: 1px solid var(--border);
+      border-radius: 16px; padding: 16px 18px;
+      box-shadow: 0 24px 60px rgba(0,0,0,0.5);
+    }
+    .player-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+    .player-head .pt { font-size: 15px; font-weight: 600; }
+    .player-head .px { background: transparent; border: none; color: var(--muted); font-size: 18px; cursor: pointer; padding: 2px 8px; border-radius: 8px; }
+    .player-head .px:hover { background: rgba(255,255,255,0.10); color: var(--text); }
+    .player-stage { position: relative; background: #000; border-radius: 12px; overflow: hidden; aspect-ratio: 16 / 9; display: flex; align-items: center; justify-content: center; }
+    .player-stage video { width: 100%; height: 100%; display: none; background: #000; }
+    .player-stage:fullscreen, .player-stage:-webkit-full-screen { width: 100vw; height: 100vh; aspect-ratio: auto; border-radius: 0; }
+    .player-loading { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; padding: 20px; text-align: center; }
+    .player-loading .spinner { width: 34px; height: 34px; border-radius: 50%; border: 3px solid rgba(255,255,255,0.18); border-top-color: var(--accent); animation: spin 0.9s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .player-loading .pstatus { font-size: 13.5px; color: var(--text); }
+    .player-loading .pbar { width: 70%; height: 8px; background: rgba(255,255,255,0.12); border-radius: 6px; overflow: hidden; }
+    .player-loading .pbar > i { display: block; height: 100%; width: 0%; background: linear-gradient(90deg, var(--accent), #5ac8fa); transition: width .25s; }
+    .player-loading .ppct { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+    .player-controls { display: flex; align-items: center; gap: 10px; margin-top: 12px; }
+    .player-controls button.ghost { padding: 6px 10px; font-size: 14px; }
+    .player-controls .ptime { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+    .player-controls input[type=range] { flex: 1; accent-color: var(--accent); }
+    .player-actions { display: flex; gap: 10px; margin-top: 14px; }
+    .player-actions .watch { flex: 1; background: var(--panel2); border: 1px solid var(--border); color: var(--text); border-radius: 9px; padding: 9px 14px; font-size: 13px; font-weight: 600; cursor: pointer; }
+    .player-actions .watch:hover { filter: brightness(1.12); }
+    .player-note { font-size: 11.5px; color: var(--muted); margin-top: 10px; text-align: center; }
+  </style>
+</head>
+<body>
+  <h1>Frame Interpoler</h1>
+  <div class="sub">Convert videos to 60+ fps locally with the open-source RIFE AI model. Hit “Play real-time” for a live smooth stream (fast model + capped resolution so it keeps pace), or “Start conversion” for a full-quality file.</div>
+
+  <div class="panel">
+    <div id="drop">
+      <div class="big">Drop videos here</div>
+      <div>or click to choose files — multiple are queued for batch conversion</div>
+      <div class="file" id="fileLabel"></div>
+    </div>
+    <div class="actions" style="margin-top:10px;">
+      <button class="ghost" id="chooseFiles">Choose files…</button>
+      <button class="ghost" id="clear">Clear queue</button>
+      <button class="ghost" id="previewBtn">▶ Play real-time</button>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="row">
+      <div>
+        <label>Target frame rate</label>
+        <select id="targetFps">
+          <option value="60" selected>60 fps</option>
+          <option value="120">120 fps</option>
+          <option value="48">48 fps</option>
+          <option value="30">30 fps</option>
+          <option value="24">24 fps</option>
+        </select>
+      </div>
+      <div>
+        <label>RIFE model</label>
+        <select id="model">
+          <option value="rife-v4.6" selected>rife-v4.6 (best quality)</option>
+          <option value="rife-v4">rife-v4</option>
+          <option value="rife-v3.1">rife-v3.1</option>
+          <option value="rife-v3.0">rife-v3.0</option>
+          <option value="rife-v2.4">rife-v2.4 (faster)</option>
+          <option value="rife-v2.3">rife-v2.3 (fastest)</option>
+          <option value="rife-anime">rife-anime (animation)</option>
+          <option value="rife-HD">rife-HD</option>
+          <option value="rife-UHD">rife-UHD (4K)</option>
+        </select>
+      </div>
+      <div>
+        <label>Hardware</label>
+        <select id="gpu">
+          <option value="auto" selected>GPU (auto)</option>
+          <option value="0">GPU device 0</option>
+          <option value="-1">CPU only</option>
+        </select>
+      </div>
+    </div>
+    <div class="checks">
+      <label><input type="checkbox" id="ttaS" /> TTA spatial</label>
+      <label><input type="checkbox" id="ttaT" /> TTA temporal</label>
+      <label><input type="checkbox" id="uhd" /> UHD (4K)</label>
+      <label><input type="checkbox" id="gpuEncode" checked /> Fast GPU encode (VideoToolbox)</label>
+    </div>
+  </div>
+
+  <div class="panel">
+    <label>Queue <span id="queueCount" style="color:var(--muted);font-weight:400;"></span></label>
+    <ul class="queue" id="queue"></ul>
+  </div>
+
+  <div class="panel">
+    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+      <label style="margin:0;">Live utilization</label>
+      <button class="ghost" id="liveGpu" style="padding:4px 10px; font-size:11.5px;">Live GPU</button>
+    </div>
+    <div class="metrics">
+      <div class="metric">
+        <div class="mtop"><span class="mlabel">CPU</span><span class="mval" id="cpuVal">0<small>%</small></span></div>
+        <canvas id="cpuGraph"></canvas>
+      </div>
+      <div class="metric">
+        <div class="mtop"><span class="mlabel">GPU</span><span class="mval" id="gpuVal">0<small>%</small></span></div>
+        <canvas id="gpuGraph"></canvas>
+      </div>
+      <div class="metric">
+        <div class="mtop"><span class="mlabel">Media Engine <small id="mediaTag" style="color:var(--muted);font-weight:400;"></small></span><span class="mval" id="mediaVal">0<small>%</small></span></div>
+        <canvas id="mediaGraph"></canvas>
+      </div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div id="progressWrap">
+      <div id="bar"><div id="fill"></div></div>
+      <div class="prow">
+        <div id="stage">Idle</div>
+        <div id="eta"></div>
+      </div>
+    </div>
+    <div class="actions">
+      <button id="convert">Start conversion</button>
+      <button class="ghost" id="pause" disabled>Pause</button>
+      <button class="danger" id="cancel" disabled>Cancel</button>
+    </div>
+    <div id="log"></div>
+    <div class="hint" id="metricsHint"></div>
+  </div>
+
+  <!-- in-app 60 FPS player -->
+  <div id="player" class="hidden">
+    <div class="player-card">
+      <div class="player-head">
+        <span class="pt" id="playerTitle">60 FPS Preview</span>
+        <button class="px" id="playerClose" title="Close">✕</button>
+      </div>
+      <div class="player-stage" id="playerStage">
+        <video id="playerVideo" playsinline></video>
+        <div class="player-loading" id="playerLoading">
+          <div class="spinner"></div>
+          <div class="pstatus" id="playerStatus">Interpolating to smooth 60 FPS…</div>
+          <div class="pbar"><i id="playerBarFill"></i></div>
+          <div class="ppct" id="playerPct">0%</div>
+        </div>
+      </div>
+      <div class="player-controls">
+        <button class="ghost" id="playerPlay" title="Play / Pause">⏯</button>
+        <span class="ptime" id="playerTime">0:00 / 0:00</span>
+        <input type="range" id="playerSeek" min="0" max="100" value="0" />
+        <button class="ghost" id="playerMute" title="Mute / Unmute">🔊</button>
+        <button class="ghost" id="playerFs" title="Full screen">⛶</button>
+      </div>
+      <div class="player-actions">
+        <button id="playerSave">Save as 60 FPS File</button>
+        <button class="watch" id="playerWatch">Watching here ▶</button>
+      </div>
+      <div class="player-note">You're watching the AI-interpolated smooth video in real time — segments are buffered into one continuous stream for gapless playback. Real-time runs on the native Apple Metal RIFE engine and handles up to 1080p at 60fps on Apple Silicon; sources above that are auto-downscaled. Use “Start conversion” for full-quality/full-resolution export. “Save as File” keeps a copy; closing discards the temp stream.</div>
+    </div>
+  </div>
+
+  <script src="renderer.js"></script>
+</body>
+</html>
